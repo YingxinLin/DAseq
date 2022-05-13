@@ -23,6 +23,8 @@
 #' @param size cell size to use in the plot, default 0.5
 #'
 #' @import RANN
+#' @import BiocParallel
+#' @import BiocNeighbors
 #' @importFrom caret createFolds
 #' @import glmnet
 #'
@@ -42,7 +44,9 @@
 getDAcells <- function(
   X, cell.labels, labels.1, labels.2, k.vector = NULL, save.knn = F,
   alpha = 0, k.folds = 10, n.runs = 5, n.rand = 2, pred.thres = NULL,
-  do.plot = T, plot.embedding = NULL, size = 0.5
+  do.plot = T, plot.embedding = NULL, size = 0.5,
+  BNPARAM = AnnoyParam(),
+  BPPARAM = SerialParam()
 ){
   if(!inherits(x = X, what = "matrix")){
     cat("Turning X to a matrix.\n")
@@ -73,8 +77,12 @@ getDAcells <- function(
 
   # get DA score vector for each cell
   cat("Calculating DA score vector.\n")
-  knn.out <- nn2(data = X, query = X, k = max(k.vector))
-  X.knn.graph <- knn.out$nn.idx
+
+  # YL - Change this to BiocNeighbours
+  #knn.out <- nn2(data = X, query = X, k = max(k.vector))
+  #X.knn.graph <- knn.out$nn.idx
+  knn.out <- BiocNeighbors::findKNN(X, k = max(k.vectors), BNPARAM = BNPARAM)
+  X.knn.graph <- knn.out$index
   X.knn.ratio <- daPerCell(
     X = X.knn.graph,
     cell.labels = cell.labels,
@@ -94,7 +102,8 @@ getDAcells <- function(
 
   X.pred <- runDAlasso(
     X = X.knn.ratio, y = factor(binary.labels),
-    k.folds = k.folds, n.runs = n.runs, alpha = alpha
+    k.folds = k.folds, n.runs = n.runs, alpha = alpha,
+    BPPARAM = BPPARAM
   )
   X.pred <- balanceP(X.pred, cell.labels = cell.labels, labels.1 = labels.1, labels.2 = labels.2)
 
@@ -381,7 +390,7 @@ daPerCell <- function(
 
 
 # LASSO regression with CV and multiple runs
-runDAlasso <- function(X, y, k.folds = 10, n.runs = 10, alpha = 0){
+runDAlasso <- function(X, y, k.folds = 10, n.runs = 10, alpha = 0,  BPPARAM = BiocParallel::SerialParam()){
   #X.data <- data.frame(X, response = as.factor(y))
   n.obs <- length(y)
   X.pred.all <- list()
@@ -389,13 +398,26 @@ runDAlasso <- function(X, y, k.folds = 10, n.runs = 10, alpha = 0){
     set.seed(ii)
     X.pred.all[[ii]] <- rep(0, n.obs)
     X.folds <- createFolds(y = y, k = k.folds)
-    for(jj in 1:k.folds){
+    # for(jj in 1:k.folds) {
+    #   X.glm <- cv.glmnet(x = X[-X.folds[[jj]],], y = y[-X.folds[[jj]]], family = "binomial", alpha = alpha)
+    #   X.glm.pred <- predict(
+    #     object = X.glm, newx = X[X.folds[[jj]],], s = "lambda.1se", type = "response"
+    #   )
+    #   X.pred.all[[ii]][X.folds[[jj]]] <- X.glm.pred
+    # }
+
+    res <- BiocParallel::bplapply(1:k.folds, function(jj) {
       X.glm <- cv.glmnet(x = X[-X.folds[[jj]],], y = y[-X.folds[[jj]]], family = "binomial", alpha = alpha)
       X.glm.pred <- predict(
         object = X.glm, newx = X[X.folds[[jj]],], s = "lambda.1se", type = "response"
       )
-      X.pred.all[[ii]][X.folds[[jj]]] <- X.glm.pred
+      X.glm.pred
+    }, BPPARAM = BPPARAM)
+
+    for(jj in 1:k.folds) {
+      X.pred.all[[ii]][X.folds[[jj]]] <- res[[jj]]
     }
+
   }
   X.pred.all <- do.call("rbind", X.pred.all)
   X.pred <- colMeans(X.pred.all)
