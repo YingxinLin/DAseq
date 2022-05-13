@@ -81,7 +81,7 @@ getDAcells <- function(
   # YL - Change this to BiocNeighbours
   #knn.out <- nn2(data = X, query = X, k = max(k.vector))
   #X.knn.graph <- knn.out$nn.idx
-  knn.out <- BiocNeighbors::findKNN(X, k = max(k.vectors), BNPARAM = BNPARAM)
+  knn.out <- BiocNeighbors::findKNN(X, k = max(k.vector), BNPARAM = BNPARAM)
   X.knn.graph <- knn.out$index
   X.knn.ratio <- daPerCell(
     X = X.knn.graph,
